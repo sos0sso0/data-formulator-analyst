@@ -395,3 +395,576 @@ AI 生成的代码
 > **用户说自然语言 → 后端把数据摘要 + 用户意图 → 打包成提示词发给 AI → AI 生成 JSON（分析计划）+ Python 代码 → 在沙盒里运行代码 → 把处理好的数据 + 图表配置 → 返回给前端渲染图表。**
 
 整个过程的"魔法"核心在于：**每个 Agent 里精心设计的 `SYSTEM_PROMPT`**。这些提示词告诉 AI "你是谁、你该做什么、输入是什么格式、输出必须是什么格式"。有了这些精确的指令，AI 才能稳定地输出可执行的 JSON + Python 代码，而不是随便聊天。
+
+---
+
+## 十四、`agents/` 目录下所有文件全览
+
+`py-src/data_formulator/agents/` 目录下共有 **17 个文件**，除了之前已介绍的，下面补充介绍全部内容：
+
+### 文件一览表
+
+| 文件名 | 对应类名 | 一句话功能 |
+|--------|---------|-----------|
+| `agent_code_explanation.py` | `CodeExplanationAgent` | 解释 AI 生成的代码，让非技术用户看懂数据转换过程 |
+| `agent_concept_derive.py` | `ConceptDeriveAgent` | 用 **TypeScript** 生成"单列派生"函数（逐行操作） |
+| `agent_data_clean.py` | `DataCleanAgent` | 从图片/文字/网页 URL 中提取结构化数据表格 |
+| `agent_data_clean_stream.py` | `DataCleanAgentStream` | 与上面功能相同，但以流式输出方式实时返回进度 |
+| `agent_data_load.py` | `DataLoadAgent` | 识别上传数据的字段类型和语义类型，给表格命名 |
+| `agent_exploration.py` | `ExplorationAgent` | 智能体模式下的"规划者"，决定继续还是停止探索 |
+| `agent_interactive_explore.py` | `InteractiveExploreAgent` | 交互式推荐下一步探索问题（流式输出） |
+| `agent_py_concept_derive.py` | `PyConceptDeriveAgent` | 用 **Python** 生成"单列派生"函数（逐行操作） |
+| `agent_py_data_rec.py` | `PythonDataRecAgent` | 当用户意图模糊时，推荐分析方向并生成 Python 转换代码 |
+| `agent_py_data_transform.py` | `PythonDataTransformationAgent` | 当用户明确了图表设计，生成 Python 数据转换代码 |
+| `agent_report_gen.py` | `ReportGenAgent` | 根据图表和数据生成 Markdown 分析报告（流式） |
+| `agent_sort_data.py` | `SortDataAgent` | 利用 AI 常识对分类字段做自然排序（如月份、年级） |
+| `agent_sql_data_rec.py` | `SQLDataRecAgent` | 当用户意图模糊时，推荐分析方向并生成 SQL 查询 |
+| `agent_sql_data_transform.py` | `SQLDataTransformationAgent` | 当用户明确了图表设计，生成 SQL 数据转换查询 |
+| `agent_utils.py` | —（工具函数集） | 提供代码提取、数据摘要生成等通用工具函数 |
+| `client_utils.py` | `Client` | 统一封装各 AI 提供商（OpenAI/Azure/Claude 等）的调用 |
+| `web_utils.py` | —（工具函数集） | 提供安全的网页抓取功能（含 SSRF 防护） |
+
+---
+
+### 之前未详细介绍的 Agent 补充说明
+
+#### ① `CodeExplanationAgent`（代码解释助手）
+
+**文件**：`agent_code_explanation.py`
+
+**触发场景**：用户点击图表旁的"解释代码"按钮时。
+
+**它做什么**：
+- 接收 AI 生成的 Python/SQL 代码和数据表摘要
+- 输出两部分内容：
+  1. **代码步骤说明**：用自然语言描述代码做了什么（像写操作步骤清单）
+  2. **新字段解释**：对代码中新计算出来的字段（如"ROI"、"归一化评分"）给出数学定义
+
+**特点**：输出包含 LaTeX 数学公式，方便用户理解复杂指标的计算方式。
+
+---
+
+#### ② `ConceptDeriveAgent`（TypeScript 单列派生助手）
+
+**文件**：`agent_concept_derive.py`
+
+**触发场景**：用户在前端"概念（Concept）"区域输入自定义字段时（基于 TypeScript 的轻量计算）。
+
+**它做什么**：
+- 接收输入字段列表、目标新字段名、以及用户描述
+- 生成一个 **TypeScript 箭头函数**，该函数以单行数据的字段值为输入，返回新字段值
+- 这个函数随后在浏览器前端执行，对每一行数据做 `map()` 映射
+
+**示例输出**：
+```typescript
+// 从 Date 字段提取月份
+(date: string) => {
+    const month = new Date(date).getMonth() + 1;
+    return month;
+}
+```
+
+**与 PyConceptDeriveAgent 的区别**：
+- `ConceptDeriveAgent` → 生成 **TypeScript** 代码 → 在**浏览器**中运行
+- `PyConceptDeriveAgent` → 生成 **Python** 代码 → 在**服务器**中运行
+
+---
+
+#### ③ `PyConceptDeriveAgent`（Python 单列派生助手）
+
+**文件**：`agent_py_concept_derive.py`
+
+**它做什么**：功能与 `ConceptDeriveAgent` 相同，但生成的是 Python 函数，运行在后端沙盒中。适用于需要更复杂计算（如正则表达式、日期解析）的场景。
+
+**示例输出**：
+```python
+import re
+import datetime
+
+def derive_new_column(df):
+    df['month'] = df['Date'].apply(
+        lambda x: datetime.datetime.strptime(x, '%m/%d/%Y').month
+    )
+    return df['month']
+```
+
+---
+
+#### ④ `SortDataAgent`（自然排序助手）
+
+**文件**：`agent_sort_data.py`
+
+**触发场景**：数据中有月份、年级、尺码等有"自然顺序"的分类字段，但系统无法自动判断顺序时。
+
+**它做什么**：
+- 接收一个字段名和它所有的取值列表
+- 利用 AI 的常识知识，把这些值排成正确的自然顺序
+- 返回排序后的数组
+
+**示例**：
+```
+输入: ["April", "August", "December", "February", ...]
+输出: ["January", "February", "March", "April", ..., "December"]
+```
+
+---
+
+#### ⑤ `SQLDataRecAgent`（SQL 推荐助手）
+
+**文件**：`agent_sql_data_rec.py`
+
+**触发场景**：与 `PythonDataRecAgent` 相同，但数据存在 DuckDB 数据库中（SQL 模式）。
+
+**它做什么**：
+- 和 `PythonDataRecAgent` 逻辑一致：用户意图模糊时主动推荐
+- 区别在于生成的是 **SQL 查询语句**，由 DuckDB 执行
+- 数据摘要通过查询 DuckDB 的元数据生成，而不是读取完整数据到内存
+
+---
+
+#### ⑥ `SQLDataTransformationAgent`（SQL 转换助手）
+
+**文件**：`agent_sql_data_transform.py`
+
+**触发场景**：用户明确了图表设计（拖拽了字段），数据存在 DuckDB 中（SQL 模式）。
+
+**它做什么**：与 `PythonDataTransformationAgent` 逻辑一致，但：
+- 生成 **SQL 查询**（而非 Python 代码）
+- 在 DuckDB 中以"视图（View）"的形式保存查询结果，支持更大数据量
+
+> 这个文件是下一章深度剖析的对象，详见第十五节。
+
+---
+
+#### ⑦ `DataCleanAgentStream`（流式数据清洗助手）
+
+**文件**：`agent_data_clean_stream.py`
+
+与 `DataCleanAgent` 功能完全相同（从图片/文字/URL 提取数据），区别在于：
+- 返回数据时使用**流式输出**（Streaming）
+- 用户可以实时看到 AI 正在逐步生成数据表的过程，而不是等待结果全部完成
+
+---
+
+#### ⑧ `agent_utils.py`（通用工具函数库）
+
+**不是一个 Agent 类**，而是整个 agents 模块共用的**工具函数集**，被其他所有 Agent 引用。
+
+主要功能：
+
+| 函数名 | 功能 |
+|-------|------|
+| `generate_data_summary()` | 把数据表格转成自然语言摘要，发给 AI 当上下文 |
+| `extract_json_objects()` | 从 AI 返回的文本中解析出 JSON 对象 |
+| `extract_code_from_gpt_response()` | 从 AI 返回的文本中提取代码块（```python...```） |
+| `get_field_summary()` | 生成单个字段的摘要（类型 + 示例值） |
+| `table_hash()` | 计算数据表的哈希值（用于判断数据是否变化） |
+
+---
+
+#### ⑨ `client_utils.py`（LLM 客户端封装）
+
+封装了与各 AI 提供商通信的逻辑，提供统一接口：
+
+```
+client.get_completion(messages)  → 普通对话（返回完整响应）
+client.get_completion(messages, stream=True)  → 流式对话（边生成边返回）
+client.get_response(messages, tools)  → 支持工具调用的对话
+```
+
+支持的提供商：OpenAI、Azure OpenAI、Anthropic Claude、Google Gemini、Ollama（本地模型）。
+
+---
+
+#### ⑩ `web_utils.py`（网页工具函数库）
+
+**不是 Agent 类**，提供安全的网页抓取能力，供 `DataCleanAgent` 使用。
+
+核心功能：
+- **SSRF 防护**：防止攻击者让服务器访问内网地址（比如 `192.168.0.1`）
+- 只允许访问公网 HTTP/HTTPS 地址
+- 自动解析 HTML，提取可读文本
+
+---
+
+## 十五、深度剖析：`agent_sql_data_transform.py` 代码结构详解
+
+这个文件是整个项目里非常有代表性的 Agent，同时处理了"与 AI 通信"和"与数据库交互"两件事。我们把它从头到尾逐块拆解。
+
+### 文件整体骨架
+
+```
+agent_sql_data_transform.py
+├── 第①块：导入依赖
+├── 第②块：SYSTEM_PROMPT（AI 的任务说明书）
+├── 第③块：EXAMPLE（示例 — 教 AI 如何回答）
+├── 第④块：sanitize_table_name()（安全工具函数）
+├── 第⑤块：SQLDataTransformationAgent（主 Agent 类）
+│   ├── __init__()   ← 初始化
+│   ├── process_gpt_sql_response()  ← 解析 AI 回答 + 执行 SQL
+│   ├── run()        ← 第一次调用入口
+│   └── followup()   ← 追问/修改调用入口
+├── 第⑥块：generate_sql_data_summary()（数据摘要生成器）
+└── 第⑦块：get_sql_table_statistics_str()（单表摘要生成器）
+```
+
+---
+
+### 第①块：导入依赖
+
+```python
+import json
+import random
+import string
+
+from data_formulator.agents.agent_utils import extract_json_objects, extract_code_from_gpt_response
+import pandas as pd
+
+import logging
+import re
+
+logger = logging.getLogger(__name__)
+```
+
+**作用**：
+- `json`：把 Python 对象转成 JSON 字符串（或反过来），用于和前端交换数据
+- `random` + `string`：生成随机字符串，用于给 DuckDB 视图命名（避免冲突）
+- `extract_json_objects`、`extract_code_from_gpt_response`：从 AI 返回的纯文本里"挖出"JSON 和 SQL 代码块
+- `pandas`：把 JSON 数据转成表格（DataFrame），便于注册到 DuckDB
+- `logging`：记录运行日志，方便排查问题
+- `re`：正则表达式，用于清理表名中的非法字符
+
+---
+
+### 第②块：`SYSTEM_PROMPT`（AI 的任务说明书）
+
+```python
+SYSTEM_PROMPT = '''You are a data scientist to help user to transform data ...
+```
+
+这是整个文件最重要的部分之一。它是发给 AI 的**固定角色说明**，告诉 AI：
+
+**① 你的身份**：你是一个数据科学家
+
+**② 你的任务**（两步走）：
+
+- **第一步**：理解用户目标，输出一个 JSON 对象，包含：
+  - `input_tables`：需要用到哪些数据表
+  - `detailed_instruction`：详细理解后的用户意图
+  - `display_instruction`：简短的展示说明（显示在 UI 上）
+  - `output_fields`：输出数据应该包含哪些字段
+  - `chart_encodings`：图表的 x/y/color 等视觉通道映射
+  - `reason`：为什么这样分析
+
+- **第二步**：写一段 SQL 查询，查询结果就是输出数据
+
+**③ 特殊约束**：
+- 所有 SQL 必须符合 **DuckDB** 语法（与标准 SQL 略有差异）
+- 日期处理需要显式类型转换（避免 DuckDB 函数重载歧义）
+- 正则表达式不能用 Unicode 转义序列（DuckDB 限制）
+
+**设计意图**：通过在提示词里给出精确的输出格式要求，保证 AI 的输出"可机器解析"——程序可以直接从 AI 的回复里提取 JSON 和 SQL，无需人工处理。
+
+---
+
+### 第③块：`EXAMPLE`（示例教学）
+
+```python
+EXAMPLE = '''
+[CONTEXT]
+...（示例数据）
+
+[GOAL]
+...（示例用户指令）
+
+[OUTPUT]
+...（示例 JSON + SQL 输出）
+'''
+```
+
+这是一个**少样本示例（Few-shot example）**。把它插入提示词，相当于告诉 AI："你应该输出的格式长这个样子"。AI 通过模仿示例，能更准确地生成符合格式的输出。
+
+> 注意：`EXAMPLE` 在这个文件里定义了，但查看代码可以发现，这个变量目前**并未**被添加到实际发送的 `messages` 中。这是一个常见的提示词工程技术决策——示例会占用大量 token（消耗费用），当 `SYSTEM_PROMPT` 本身已经足够清晰时，往往会省略示例以降低成本。`EXAMPLE` 变量在代码中保留，一方面作为开发文档说明输出格式，另一方面便于未来需要时重新启用。
+
+---
+
+### 第④块：`sanitize_table_name()`（安全工具函数）
+
+```python
+def sanitize_table_name(table_name: str) -> str:
+    """Sanitize table name to be used in SQL queries"""
+    sanitized_name = table_name.replace(" ", "_")
+    sanitized_name = sanitized_name.replace("-", "_")
+    sanitized_name = re.sub(r'[^a-zA-Z0-9_\.$]', '', sanitized_name)
+    return sanitized_name
+```
+
+**为什么需要这个函数？**
+
+用户上传的数据文件名可能包含空格、特殊符号（如 `sales data (Q1).csv`），这些字符在 SQL 语句中会导致语法错误。这个函数把表名转换为合法的 SQL 标识符：
+- 空格和连字符 → 下划线
+- 其余特殊字符（除字母、数字、`_`、`.`、`$`）→ 删除
+
+**例子**：`"sales data (Q1)"` → `"sales_data_Q1"`
+
+---
+
+### 第⑤块：`SQLDataTransformationAgent` 类（主 Agent）
+
+#### `__init__()`：初始化
+
+```python
+def __init__(self, client, conn, system_prompt=None, agent_coding_rules=""):
+    self.client = client      # LLM 客户端（负责调用 AI）
+    self.conn = conn          # DuckDB 数据库连接
+
+    if system_prompt is not None:
+        self.system_prompt = system_prompt
+    else:
+        base_prompt = SYSTEM_PROMPT
+        if agent_coding_rules and agent_coding_rules.strip():
+            self.system_prompt = base_prompt + "\n\n[AGENT CODING RULES]\n..." + agent_coding_rules
+        else:
+            self.system_prompt = base_prompt
+```
+
+**存储两个关键对象**：
+1. `client`：LLM 调用接口（通过 `client_utils.py` 的 `Client` 类）
+2. `conn`：DuckDB 数据库连接，用于后续执行 SQL
+
+**系统提示词组装**：允许用户或管理员附加"编码规则"（`agent_coding_rules`）追加到提示词末尾，覆盖 AI 的默认行为（如"禁止使用子查询"）。
+
+---
+
+#### `process_gpt_sql_response()`：解析 AI 回答并执行 SQL
+
+这是最复杂的方法，完整流程如下：
+
+```
+AI 返回的原始文本
+    ↓
+① 提取 JSON 块（extract_json_objects）
+    → 得到 refined_goal（分析意图）
+    ↓
+② 提取 SQL 块（extract_code_from_gpt_response）
+    → 得到 query_str（SQL 查询语句）
+    ↓
+③ 生成随机视图名（如 "view_xkqz"）
+    ↓
+④ 在 DuckDB 中创建视图：
+   CREATE VIEW IF NOT EXISTS view_xkqz AS <query_str>
+    ↓
+⑤ 查询行数，若超过 5000 行则截断
+    ↓
+⑥ 把结果转成 JSON 格式返回
+    ↓
+⑦ 附带 dialog（对话历史）、agent 名称、refined_goal
+```
+
+关键代码段详解：
+
+```python
+# ③ 生成随机视图名，避免多次调用时命名冲突
+random_suffix = ''.join(random.choices(string.ascii_lowercase, k=4))
+table_name = f"view_{random_suffix}"
+
+# ④ 把 AI 生成的 SQL 创建为 DuckDB 视图
+# 使用视图而非普通表：视图是"虚拟表"，不实际存储数据，节省内存
+create_query = f"CREATE VIEW IF NOT EXISTS {table_name} AS {query_str}"
+self.conn.execute(create_query)
+
+# ⑤ 大数据保护：超过 5000 行时自动截断，避免把海量数据传回前端
+row_count = self.conn.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+if row_count > 5000:
+    query_output = self.conn.execute(f"SELECT * FROM {table_name} LIMIT 5000").fetch_df()
+else:
+    query_output = self.conn.execute(f"SELECT * FROM {table_name}").fetch_df()
+
+# ⑥ 结果转 JSON，附带虚拟表信息（表名 + 总行数）
+result = {
+    "status": "ok",
+    "code": query_str,
+    "content": {
+        'rows': json.loads(query_output.to_json(orient='records')),
+        'virtual': {
+            'table_name': table_name,   # DuckDB 中的视图名
+            'row_count': row_count      # 总行数（即使超过 5000 也保留真实值）
+        }
+    },
+}
+```
+
+**为什么用"视图"而不是普通表？**
+- 视图（View）是保存在数据库里的一条查询语句，不实际存储数据
+- 用户后续想"修改"这个分析时，只需重新覆盖视图定义，不用复制数据
+- 大数据场景下，视图比复制数据表效率高得多
+
+---
+
+#### `run()`：首次调用入口
+
+```python
+def run(self, input_tables, description, chart_type, chart_encodings, prev_messages=[], n=1):
+```
+
+**工作步骤**：
+
+1. **把数据表注册到 DuckDB**（如果还没有的话）：
+   ```python
+   for table in input_tables:
+       table_name = sanitize_table_name(table['name'])
+       try:
+           self.conn.execute(f"DESCRIBE {table_name}")  # 检查是否已存在
+       except Exception:
+           df = pd.DataFrame(table['rows'])
+           self.conn.register('df_temp', df)  # 临时注册 DataFrame
+           self.conn.execute(f"CREATE TABLE {table_name} AS SELECT * FROM df_temp")
+           # 把前端传来的 JSON 数据持久化为 DuckDB 表
+   ```
+
+2. **生成数据摘要**（发给 AI 当上下文）：
+   ```python
+   data_summary = generate_sql_data_summary(self.conn, input_tables)
+   ```
+
+3. **组装用户目标**（Goal）：
+   ```python
+   goal = {
+       "instruction": description,      # 用户的自然语言描述
+       "chart_type": chart_type,        # 图表类型（bar/line/scatter...）
+       "chart_encodings": chart_encodings,  # X/Y/Color 轴映射
+   }
+   user_query = f"[CONTEXT]\n\n{data_summary}\n\n[GOAL]\n\n{json.dumps(goal)}"
+   ```
+
+4. **组装完整消息并调用 AI**：
+   ```python
+   messages = [
+       {"role": "system", "content": self.system_prompt},  # 角色说明
+       *filtered_prev_messages,                              # 历史对话（如有）
+       {"role": "user", "content": user_query}              # 当前请求
+   ]
+   response = self.client.get_completion(messages=messages)
+   ```
+
+5. **处理 AI 回答**：
+   ```python
+   return self.process_gpt_sql_response(response, messages)
+   ```
+
+---
+
+#### `followup()`：追问/修改调用入口
+
+```python
+def followup(self, input_tables, dialog, latest_data_sample, 
+             chart_type, chart_encodings, new_instruction, n=1):
+```
+
+**使用场景**：用户在看到图表后说"改一下，只看2023年的数据"，系统需要在之前的 SQL 基础上修改。
+
+**与 `run()` 的核心区别**：
+
+```python
+# run() 发送全新的对话
+messages = [system_prompt, user_query]
+
+# followup() 在已有对话历史上追加新指令
+updated_dialog = [system_prompt, *dialog[1:]]  # 保留历史对话（替换开头的 system）
+messages = [
+    *updated_dialog,
+    {"role": "user",
+     "content": f"This is the result from the latest sql query:\n\n{sample_data_str}\n\n"
+                f"Update the sql query above based on the following instruction:\n\n{goal}"}
+]
+```
+
+**为什么要带上"上一次的结果数据"？**
+让 AI 看到上次 SQL 运行后的实际数据样本，有助于 AI 更准确地理解当前数据状态，从而生成更有针对性的修改。
+
+---
+
+### 第⑥块：`generate_sql_data_summary()`（数据摘要生成器）
+
+```python
+def generate_sql_data_summary(conn, input_tables, ...):
+```
+
+**作用**：把 DuckDB 中存储的表格信息汇总成自然语言描述，作为"上下文"发给 AI。
+
+输出格式示例：
+
+````
+## Table 1: sales_data (10,000 rows × 5 columns)
+
+### Schema (5 fields)
+  - city -- type: VARCHAR, values: 北京, 上海, 广州, ...
+  - date -- type: DATE, values: 2024-01-01, 2024-01-02, ...
+  - sales -- type: INTEGER, range: [1000, 500000]
+
+### Sample Data (first 5 rows)
+```
+...（表格前5行）
+```
+````
+
+**关键设计**：只发摘要不发完整数据。即使数据库里有 100 万行数据，发给 AI 的也只是字段名、类型、几个示例值和5行样本——这样既节省 token，又让 AI 有足够的上下文。
+
+---
+
+### 第⑦块：`get_sql_table_statistics_str()`（单表摘要生成器）
+
+```python
+def get_sql_table_statistics_str(conn, table_name, ...):
+```
+
+**作用**：生成单张表的详细统计摘要。
+
+**对不同字段类型的处理差异**：
+
+```python
+if col_type in ['INTEGER', 'BIGINT', 'DOUBLE', ...]:
+    # 数字类型：查最小值和最大值，展示为区间
+    # 例：range: [1000, 500000]
+    range_result = conn.execute(f"SELECT MIN({col}), MAX({col}) FROM {table}").fetchone()
+else:
+    # 文字类型：查最多 14 个不同值作为示例
+    # 例：values: 北京, 上海, 广州, ..., 成都, 武汉
+    sample_values = conn.execute(f"SELECT DISTINCT {col} ... LIMIT 14").fetchall()
+```
+
+**设计意图**：数字字段用"范围"描述，文字字段用"枚举示例"描述，两种方式都能让 AI 快速理解该字段的数据分布，而不需要发送完整数据。
+
+---
+
+### 整个 `agent_sql_data_transform.py` 的数据流汇总
+
+```
+前端发来请求
+  input_tables = [{"name": "sales", "rows": [...]}]
+  description = "显示各城市销售额"
+  chart_type = "bar"
+  chart_encodings = {"x": "city", "y": "total_sales"}
+         ↓
+① 把 JSON 数据注册进 DuckDB（CREATE TABLE sales AS ...）
+         ↓
+② 查询 DuckDB 元数据，生成数据摘要文本
+         ↓
+③ 组装提示词（SYSTEM_PROMPT + 数据摘要 + 用户目标）
+         ↓
+④ 调用 LLM（GPT-4o / Claude 等）
+         ↓
+⑤ LLM 返回文本，包含：
+   - JSON：{"input_tables": [...], "output_fields": [...], "chart_encodings": {...}}
+   - SQL：SELECT city, SUM(sales) AS total_sales FROM sales GROUP BY city
+         ↓
+⑥ 在 DuckDB 中创建视图：CREATE VIEW view_xkqz AS <SQL>
+         ↓
+⑦ 查询视图，取最多 5000 行结果
+         ↓
+⑧ 把结果转成 JSON 返回给前端
+         ↓
+前端用 Vega-Lite 渲染出柱状图
+```
+
+这就是一个 SQL Agent 完整的"从用户输入到图表显示"的全过程。
